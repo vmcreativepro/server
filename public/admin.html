@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Practicon Chat Admin Console</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; }
+    aside { width: 240px; background: #8b1f2d; color: white; padding: 16px; overflow-y: auto; }
+    aside h2 { font-size: 18px; margin-top: 0; }
+    aside ul { list-style: none; padding: 0; }
+    aside li { margin: 6px 0; cursor: pointer; padding: 6px; border-radius: 4px; }
+    aside li.active, aside li:hover { background: #a8323a; }
+    main { flex: 1; display: flex; flex-direction: column; }
+    header { background: #f8f8f8; padding: 10px; border-bottom: 1px solid #ccc; }
+    #chat { flex: 1; padding: 10px; overflow-y: auto; background: #fafafa; }
+    #chat .msg { margin: 5px 0; padding: 8px; border-radius: 8px; max-width: 70%; }
+    #chat .user { background: #8b1f2d; color: white; margin-left: auto; }
+    #chat .agent { background: #eaeaea; color: #111; }
+    footer { display: flex; border-top: 1px solid #ccc; }
+    footer input { flex: 1; padding: 10px; border: none; outline: none; }
+    footer button { background: #8b1f2d; color: white; border: none; padding: 10px 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <aside>
+    <h2>Sessions</h2>
+    <ul id="sessions"></ul>
+  </aside>
+  <main>
+    <header>
+      <strong id="sessionTitle">No session selected</strong>
+    </header>
+    <div id="chat"></div>
+    <footer>
+      <input id="msgInput" type="text" placeholder="Type your message..." />
+      <button id="sendBtn">Send</button>
+    </footer>
+  </main>
+  <script>
+    const sessionsEl = document.getElementById('sessions');
+    const chatEl = document.getElementById('chat');
+    const inputEl = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const titleEl = document.getElementById('sessionTitle');
+    let ws, sessions = {}, activeSession = null;
+
+    function connect(){
+      ws = new WebSocket(location.origin.replace('http', 'ws') + '/ws?sid=admin');
+      ws.onmessage = (evt)=>{
+        const data = JSON.parse(evt.data);
+        if(data.type === 'user-message'){
+          if(!sessions[data.sessionId]) sessions[data.sessionId] = [];
+          sessions[data.sessionId].push({ role:'user', text:data.text });
+          renderSessions();
+          if(data.sessionId === activeSession) renderChat();
+        }
+      };
+    }
+
+    function renderSessions(){
+      sessionsEl.innerHTML = Object.keys(sessions).map(sid=>`<li data-sid="${sid}" ${sid===activeSession?'class="active"':''}>${sid}</li>`).join('');
+      sessionsEl.querySelectorAll('li').forEach(li=> li.onclick=()=>{ activeSession = li.dataset.sid; renderSessions(); renderChat(); });
+    }
+
+    function renderChat(){
+      chatEl.innerHTML = '';
+      if(!activeSession){ titleEl.textContent='No session selected'; return; }
+      titleEl.textContent = 'Chat with ' + activeSession;
+      (sessions[activeSession]||[]).forEach(m=>{
+        const div=document.createElement('div'); div.className='msg '+m.role; div.textContent=m.text; chatEl.appendChild(div);
+      });
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    sendBtn.onclick = ()=>{
+      const text = inputEl.value.trim(); if(!text || !activeSession) return;
+      ws.send(JSON.stringify({ type:'agent-message', sessionId: activeSession, text }));
+      sessions[activeSession].push({ role:'agent', text }); inputEl.value=''; renderChat();
+    };
+
+    connect();
+  </script>
+</body>
+</html>
