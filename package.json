@@ -1,0 +1,14 @@
+{
+  "name": "practicon-chat-server",
+  "version": "1.0.0",
+  "description": "Practicon Customer Service Chat backend server",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.15.1"
+  }
+}
