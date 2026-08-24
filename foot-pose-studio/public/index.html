@@ -66,6 +66,15 @@
              animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .empty { color: var(--muted); font-size: 14px; }
+
+  #setup { padding: 16px 28px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  #setup .row2 { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  #setup .grow { flex: 1 1 260px; }
+  #setup label { margin-top: 0; }
+  #setup button { padding: 9px 18px; border: 0; border-radius: 8px; background: var(--accent);
+                  color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  #setup .state { font-size: 13px; color: var(--muted); }
+  #setup .ok { color: #6ee7a8; }
 </style>
 </head>
 <body>
@@ -74,6 +83,21 @@
   <span class="tag">AI REFERENCE</span>
   <span class="status" id="status">connecting…</span>
 </header>
+
+<section id="setup">
+  <div class="row2">
+    <div class="grow">
+      <label for="setProvider">Image service</label>
+      <select id="setProvider"></select>
+    </div>
+    <div class="grow">
+      <label for="setKey">API key</label>
+      <input id="setKey" type="password" placeholder="paste your key here" autocomplete="off">
+    </div>
+    <button id="setSave" type="button">Save</button>
+    <span class="state" id="setState"></span>
+  </div>
+</section>
 
 <main>
   <form id="controls">

@@ -38,11 +38,68 @@ async function init() {
   $('framing').value = 'feet-legs';
   $('surface').value = 'yoga-mat';
 
+  await initSetup();
   els.status.textContent = `provider: ${options.activeProvider}`;
   els.form.addEventListener('input', debounce(refreshPrompt, 200));
   els.form.addEventListener('submit', onSubmit);
   refreshPrompt();
   renderJobs(await api('/api/jobs?limit=24'));
+}
+
+const KEY_FIELD = {
+  replicate: 'REPLICATE_API_TOKEN',
+  stability: 'STABILITY_API_KEY',
+  openai: 'OPENAI_API_KEY',
+};
+
+// Setup bar: choose a service and paste its key, no .env editing required.
+async function initSetup() {
+  const provider = $('setProvider'), key = $('setKey'), save = $('setSave'), state = $('setState');
+
+  fill(provider, options.providers.map((p) => ({ id: p.id, label: p.label })));
+  const current = await api('/api/settings');
+  provider.value = current.provider;
+
+  const showState = (s) => {
+    const field = KEY_FIELD[provider.value];
+    key.disabled = !field;
+    key.placeholder = field ? 'paste your key here' : 'no key needed';
+    if (!field) return void (state.textContent = 'Ready — no key needed.');
+    state.innerHTML = s.keys[field]
+      ? '<span class="ok">Key saved ✓</span>'
+      : 'Needs a key before it can generate.';
+  };
+  showState(current);
+
+  provider.addEventListener('change', () => showState(current));
+
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    state.textContent = 'Saving…';
+    try {
+      const patch = { IMAGE_PROVIDER: provider.value };
+      const field = KEY_FIELD[provider.value];
+      if (field && key.value.trim()) patch[field] = key.value.trim();
+
+      const next = await api('/api/settings', patch);
+      Object.assign(current, next);
+      key.value = '';
+      showState(next);
+
+      options = await api('/api/options');
+      fill($('provider'), options.providers.map((p) => ({
+        id: p.id,
+        label: p.configured ? p.label : `${p.label} — not configured`,
+        disabled: !p.configured,
+      })));
+      $('provider').value = next.provider;
+      els.status.textContent = `provider: ${next.provider}`;
+    } catch (err) {
+      state.textContent = err.message;
+    } finally {
+      save.disabled = false;
+    }
+  });
 }
 
 function selection() {

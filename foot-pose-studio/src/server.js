@@ -7,6 +7,7 @@ import { CATALOG, buildPrompt, resolveAspect, NEGATIVE_PROMPT } from './poses.js
 import { getProvider, listProviders } from './providers/index.js';
 import { JobStore } from './store.js';
 import { checkPrompt } from './safety.js';
+import { Settings } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.join(__dirname, '..');
@@ -17,6 +18,7 @@ const OUTPUT_DIR = path.resolve(appRoot, process.env.OUTPUT_DIR || 'data/generat
 const PORT = Number(process.env.PORT) || 4000;
 const MAX_IMAGES = 4;
 
+const settings = new Settings(appRoot);
 const store = new JobStore({ outputDir: OUTPUT_DIR });
 await store.init();
 
@@ -29,6 +31,19 @@ app.use('/api', requireApiKey);
 app.get('/api/health', (req, res) => {
   const provider = getProvider();
   res.json({ ok: true, provider: provider.id, configured: provider.isConfigured() });
+});
+
+app.get('/api/settings', (req, res) => {
+  res.json(settings.publicState());
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    res.json(await settings.update(req.body ?? {}));
+  } catch (err) {
+    console.error('Could not save settings:', err);
+    res.status(500).json({ error: 'Could not save settings to .env' });
+  }
 });
 
 app.get('/api/options', (req, res) => {
