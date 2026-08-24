@@ -4,17 +4,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CATALOG, buildPrompt, NEGATIVE } from './prompt.js';
-import { generate, hasKey } from './replicate.js';
+import { getProvider, listProviders, DEFAULT_PROVIDER, KEY_VARS } from './providers/index.js';
 import { checkExtra } from './safety.js';
 import { Store } from './store.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-loadEnv(path.join(root, '.env'));
+const ENV_FILE = path.join(root, '.env');
+loadEnv(ENV_FILE);
 
 const PORT = Number(process.env.PORT) || 4000;
 const IMAGES = path.resolve(root, process.env.IMAGE_DIR || 'data/images');
-const ASPECTS = ['1:1', '4:5', '3:4', '16:9'];
 const MAX_BATCH = 4;
+
+// Pixel sizes travel with the aspect so keyless backends, which take width and
+// height rather than a ratio string, get usable dimensions.
+const ASPECTS = [
+  { id: '4:5', label: 'Portrait 4:5', width: 896, height: 1120 },
+  { id: '1:1', label: 'Square 1:1', width: 1024, height: 1024 },
+  { id: '3:4', label: 'Portrait 3:4', width: 896, height: 1194 },
+  { id: '16:9', label: 'Landscape 16:9', width: 1344, height: 756 },
+];
 
 const store = new Store(IMAGES);
 await store.init();
@@ -25,32 +34,46 @@ app.use(express.static(path.join(root, 'public')));
 app.use('/images', express.static(IMAGES, { maxAge: '7d' }));
 
 app.get('/api/config', (req, res) => {
-  res.json({ ...CATALOG, aspects: ASPECTS, maxBatch: MAX_BATCH, ready: hasKey() });
+  res.json({
+    ...CATALOG,
+    aspects: ASPECTS,
+    maxBatch: MAX_BATCH,
+    providers: listProviders(),
+    activeProvider: activeProviderId(),
+  });
 });
 
 app.post('/api/preview', (req, res) => {
   const verdict = checkExtra(req.body?.extra ?? '');
   if (!verdict.ok) return res.status(400).json({ error: verdict.reason });
-  res.json({ prompt: buildPrompt(req.body ?? {}) });
+  res.json({ prompt: buildPrompt(req.body ?? {}), negative: NEGATIVE });
 });
 
-// The key is entered in the browser rather than a file. It lives in this
-// process and in .env beside the app; it is never sent back to the client.
-app.post('/api/key', async (req, res) => {
-  const key = String(req.body?.key ?? '').trim();
-  if (key && !/^r8_[A-Za-z0-9]{20,}$/.test(key)) {
-    return res.status(400).json({ error: 'That does not look like a Replicate key (they start with r8_).' });
+/** Store a provider key and/or the chosen provider. Keys are never sent back. */
+app.post('/api/settings', async (req, res) => {
+  const { provider, keyVar, key } = req.body ?? {};
+
+  if (provider) {
+    if (!listProviders().some((p) => p.id === provider)) {
+      return res.status(400).json({ error: 'Unknown service.' });
+    }
+    process.env.IMAGE_PROVIDER = provider;
   }
-  if (key) process.env.REPLICATE_API_TOKEN = key;
-  else delete process.env.REPLICATE_API_TOKEN;
+
+  if (keyVar) {
+    if (!KEY_VARS.includes(keyVar)) return res.status(400).json({ error: 'Unknown key field.' });
+    const value = String(key ?? '').trim();
+    if (value) process.env[keyVar] = value;
+    else delete process.env[keyVar];
+  }
 
   try {
-    await saveEnv(path.join(root, '.env'), 'REPLICATE_API_TOKEN', key);
+    await persistEnv();
   } catch (err) {
-    console.error('Could not persist the key:', err);
-    return res.status(500).json({ error: 'Key is active for now, but could not be saved for next restart.' });
+    console.error('Could not write .env:', err);
+    return res.status(500).json({ error: 'Settings are active now, but could not be saved for next restart.' });
   }
-  res.json({ ready: hasKey() });
+  res.json({ providers: listProviders(), activeProvider: activeProviderId() });
 });
 
 app.post('/api/generate', async (req, res) => {
@@ -58,18 +81,22 @@ app.post('/api/generate', async (req, res) => {
 
   const verdict = checkExtra(body.extra ?? '');
   if (!verdict.ok) return res.status(400).json({ error: verdict.reason });
-  if (!hasKey()) return res.status(503).json({ error: 'Add your Replicate API key in Setup first.' });
 
-  const aspect = ASPECTS.includes(body.aspect) ? body.aspect : '4:5';
+  const provider = getProvider(body.provider || activeProviderId());
+  if (!provider.isReady()) {
+    return res.status(503).json({ error: `${provider.label} needs a key. Add one in Setup, or switch to a free service.` });
+  }
+
+  const aspect = ASPECTS.find((a) => a.id === body.aspect) ?? ASPECTS[0];
   const count = Math.min(MAX_BATCH, Math.max(1, Number(body.count) || 1));
   const seed = Number.isInteger(Number(body.seed)) ? Number(body.seed) : Math.floor(Math.random() * 2 ** 31);
   const prompt = buildPrompt(body);
 
-  const job = store.create({ prompt, selection: body, aspect, seed, count });
+  const job = store.create({ prompt, selection: body, provider: provider.id, aspect: aspect.id, seed, count });
   await store.save();
   res.status(202).json(job);
 
-  run(job, { prompt, aspect, seed, count });
+  run(job, provider, { prompt, aspect, seed, count });
 });
 
 app.get('/api/jobs', (req, res) => res.json(store.list(Number(req.query.limit) || 40)));
@@ -84,16 +111,29 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong on the server.' });
 });
 
-async function run(job, { prompt, aspect, seed, count }) {
+async function run(job, provider, { prompt, aspect, seed, count }) {
   await store.patch(job.id, { status: 'running' });
   try {
-    const results = await generate({ prompt, negative: NEGATIVE, aspect, seed, count });
+    const results = await provider.generate({
+      prompt,
+      negative: NEGATIVE,
+      aspect: aspect.id,
+      width: aspect.width,
+      height: aspect.height,
+      seed,
+      count,
+    });
     const images = [];
     for (const [i, result] of results.entries()) images.push(await store.write(job.id, result, i));
     await store.patch(job.id, { status: 'done', images });
   } catch (err) {
     await store.patch(job.id, { status: 'error', error: err.message });
   }
+}
+
+function activeProviderId() {
+  const id = process.env.IMAGE_PROVIDER?.trim();
+  return listProviders().some((p) => p.id === id) ? id : DEFAULT_PROVIDER;
 }
 
 function loadEnv(file) {
@@ -104,18 +144,22 @@ function loadEnv(file) {
   }
 }
 
-async function saveEnv(file, key, value) {
+async function persistEnv() {
+  const managed = ['IMAGE_PROVIDER', ...KEY_VARS];
   let text = '';
   try {
-    text = await fs.promises.readFile(file, 'utf8');
+    text = await fs.promises.readFile(ENV_FILE, 'utf8');
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
   }
-  const kept = text.split('\n').filter((l) => !new RegExp(`^\\s*${key}\\s*=`).test(l)).join('\n').trim();
-  const next = [kept, value ? `${key}=${value}` : ''].filter(Boolean).join('\n');
-  await fs.promises.writeFile(file, next + '\n', { mode: 0o600 });
+  const kept = text.split('\n')
+    .filter((line) => !managed.some((key) => new RegExp(`^\\s*${key}\\s*=`).test(line)))
+    .join('\n').trim();
+  const lines = managed.filter((key) => process.env[key]).map((key) => `${key}=${process.env[key]}`);
+  await fs.promises.writeFile(ENV_FILE, [kept, ...lines].filter(Boolean).join('\n') + '\n', { mode: 0o600 });
 }
 
 app.listen(PORT, () => {
-  console.log(`Pose Studio → http://localhost:${PORT}  ${hasKey() ? '(key loaded)' : '(no key yet — add one in Setup)'}`);
+  const active = getProvider(activeProviderId());
+  console.log(`Pose Studio → http://localhost:${PORT}   service: ${active.label}${active.isReady() ? '' : ' (needs a key)'}`);
 });

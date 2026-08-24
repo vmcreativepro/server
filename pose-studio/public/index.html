@@ -87,15 +87,17 @@
 </header>
 
 <section id="setup">
-  <p>Paste a Replicate API key to start generating. Get one free at
-     <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noopener">replicate.com/account/api-tokens</a>
-     — images cost a few cents each. The key is stored on this server only.</p>
+  <p id="setupNote"></p>
   <div class="row">
-    <div style="flex:1 1 340px">
-      <label for="key">Replicate API key</label>
-      <input id="key" type="password" placeholder="r8_..." autocomplete="off" spellcheck="false">
+    <div style="flex:1 1 260px">
+      <label for="provider">Image service</label>
+      <select id="provider"></select>
     </div>
-    <button class="go" id="saveKey" type="button">Save key</button>
+    <div style="flex:1 1 300px" id="keyWrap">
+      <label for="key" id="keyLabel">API key</label>
+      <input id="key" type="password" autocomplete="off" spellcheck="false">
+    </div>
+    <button class="go" id="saveSetup" type="button">Save</button>
     <span id="keyState" style="color:var(--dim);font-size:14px"></span>
   </div>
 </section>

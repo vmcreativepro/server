@@ -14,7 +14,7 @@ async function start() {
   fillSelect($('pose'), config.POSES);
   fillSelect($('view'), config.VIEWS);
   fillSelect($('setting'), config.SETTINGS);
-  fillSelect($('aspect'), config.aspects.map((a) => ({ id: a, label: a })));
+  fillSelect($('aspect'), config.aspects);
   fillSelect($('count'), Array.from({ length: config.maxBatch }, (_, i) => ({
     id: String(i + 1), label: i === 0 ? '1 image' : `${i + 1} images`,
   })));
@@ -24,12 +24,12 @@ async function start() {
   $('setting').value = 'yoga-mat';
   $('aspect').value = '4:5';
 
-  setReady(config.ready);
-  if (!config.ready) $('setup').classList.add('open');
+  initSetup();
 
   $('toggleSetup').addEventListener('click', () => $('setup').classList.toggle('open'));
-  $('saveKey').addEventListener('click', saveKey);
-  $('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKey(); });
+  $('saveSetup').addEventListener('click', saveSetup);
+  $('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSetup(); });
+  $('provider').addEventListener('change', paintSetup);
   $('go').addEventListener('click', generate);
   $('showPrompt').addEventListener('click', showPrompt);
 
@@ -44,31 +44,66 @@ function choice() {
     aspect: $('aspect').value,
     count: Number($('count').value),
     extra: $('extra').value,
+    provider: $('provider') ? $('provider').value : undefined,
   };
 }
 
-function setReady(ready) {
-  $('dot').classList.toggle('on', ready);
-  $('go').disabled = !ready;
-  $('keyState').textContent = ready ? 'Key saved — ready to generate.' : 'No key yet.';
+function current() {
+  return config.providers.find((p) => p.id === $('provider').value) ?? config.providers[0];
 }
 
-async function saveKey() {
-  const key = $('key').value.trim();
-  if (!key) return;
-  $('saveKey').disabled = true;
+function initSetup() {
+  fillSelect($('provider'), config.providers.map((p) => ({
+    id: p.id, label: p.free ? `${p.label}  ·  free` : p.label,
+  })));
+  $('provider').value = config.activeProvider;
+  paintSetup();
+  if (!current().ready) $('setup').classList.add('open');
+}
+
+/** Reflect the selected service: free ones hide the key field entirely. */
+function paintSetup() {
+  const p = current();
+  const needsKey = Boolean(p.needsKey);
+
+  $('keyWrap').style.display = needsKey ? '' : 'none';
+  $('keyLabel').textContent = needsKey ? `API key (${p.keyHint || ''})` : 'API key';
+  $('key').placeholder = p.keyHint || '';
+
+  $('setupNote').innerHTML = p.free && !needsKey
+    ? 'This service is free and needs no account. Just press Save and start generating.'
+    : p.free
+      ? 'Free tier. Get a token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a> — no card needed.'
+      : 'Paid. Get a key at <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noopener">replicate.com/account/api-tokens</a>. Without a card on file Replicate throttles hard, so free services above are the safer default.';
+
+  const ready = p.ready || !needsKey;
+  $('dot').classList.toggle('on', ready);
+  $('go').disabled = !ready;
+  $('keyState').textContent = needsKey ? (p.ready ? 'Key saved.' : 'No key yet.') : 'Ready — no key needed.';
+}
+
+async function saveSetup() {
+  $('saveSetup').disabled = true;
   $('keyState').textContent = 'Saving…';
   try {
-    const { ready } = await api('/api/key', { key });
+    const body = { provider: $('provider').value };
+    const p = current();
+    if (p.needsKey && $('key').value.trim()) {
+      body.keyVar = p.needsKey;
+      body.key = $('key').value.trim();
+    }
+    const next = await api('/api/settings', body);
+    config.providers = next.providers;
+    config.activeProvider = next.activeProvider;
     $('key').value = '';
-    setReady(ready);
-    if (ready) setTimeout(() => $('setup').classList.remove('open'), 700);
+    paintSetup();
     fail('');
+    if (current().ready || !current().needsKey) setTimeout(() => $('setup').classList.remove('open'), 700);
   } catch (err) {
     $('keyState').textContent = '';
     fail(err.message);
   } finally {
-    $('saveKey').disabled = false;
+    $('saveSetup').disabled = false;
   }
 }
 
@@ -93,7 +128,7 @@ async function generate() {
   } catch (err) {
     fail(err.message);
   } finally {
-    $('go').disabled = !config.ready;
+    $('go').disabled = false;
     $('go').textContent = 'Generate';
   }
 }
