@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foot Pose Studio</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #171a1f; --panel-2: #1e222a; --line: #2a2f38;
+    --text: #e8eaee; --muted: #9aa2b1; --accent: #e2426a; --accent-soft: #e2426a22;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+           padding: 20px 28px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  header .tag { background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+                letter-spacing: .1em; padding: 3px 8px; border-radius: 4px; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 0; align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+  #controls { padding: 22px 24px 60px; border-right: 1px solid var(--line);
+              position: sticky; top: 0; max-height: 100vh; overflow-y: auto; }
+  @media (max-width: 860px) { #controls { position: static; max-height: none; border-right: 0;
+                                          border-bottom: 1px solid var(--line); } }
+  label { display: block; margin: 16px 0 6px; font-size: 12px; font-weight: 600;
+          letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  select, textarea, input {
+    width: 100%; padding: 9px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 14px;
+  }
+  select:focus, textarea:focus, input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 68px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button.primary {
+    width: 100%; margin-top: 22px; padding: 12px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 700;
+    font-size: 15px; cursor: pointer;
+  }
+  button.primary:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .error { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 13px;
+           background: #4a1a24; color: #ffc9d4; border: 1px solid #7c2438; }
+  .error:empty { display: none; }
+
+  #preview { padding: 22px 28px 80px; }
+  #promptPreview { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+                   padding: 14px 16px; font: 13px/1.6 ui-monospace, monospace; color: var(--muted);
+                   white-space: pre-wrap; }
+  h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+       color: var(--muted); margin: 26px 0 12px; }
+  #gallery { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+          overflow: hidden; display: flex; flex-direction: column; }
+  .card img { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--panel-2); display: block; }
+  .card .meta { padding: 10px 12px; font-size: 12px; color: var(--muted);
+                display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .card a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .card.pending { padding: 28px 14px; text-align: center; color: var(--muted); font-size: 13px; }
+  .spinner { width: 22px; height: 22px; margin: 0 auto 10px; border-radius: 50%;
+             border: 2px solid var(--line); border-top-color: var(--accent);
+             animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Foot Pose Studio</h1>
+  <span class="tag">AI REFERENCE</span>
+  <span class="status" id="status">connecting…</span>
+</header>
+
+<main>
+  <form id="controls">
+    <label for="pose">Pose</label>
+    <select id="pose" name="pose"></select>
+
+    <label for="angle">Camera angle</label>
+    <select id="angle" name="angle"></select>
+
+    <label for="framing">Framing</label>
+    <select id="framing" name="framing"></select>
+
+    <div class="row">
+      <div>
+        <label for="surface">Surface</label>
+        <select id="surface" name="surface"></select>
+      </div>
+      <div>
+        <label for="lighting">Lighting</label>
+        <select id="lighting" name="lighting"></select>
+      </div>
+    </div>
+
+    <label for="style">Style</label>
+    <select id="style" name="style"></select>
+
+    <div class="row">
+      <div>
+        <label for="aspect">Aspect</label>
+        <select id="aspect" name="aspect"></select>
+      </div>
+      <div>
+        <label for="count">Images</label>
+        <select id="count" name="count"></select>
+      </div>
+    </div>
+
+    <label for="provider">Provider</label>
+    <select id="provider" name="provider"></select>
+
+    <label for="seed">Seed <span style="text-transform:none;font-weight:400">(blank = random)</span></label>
+    <input id="seed" name="seed" inputmode="numeric" placeholder="random">
+
+    <label for="extra">Extra details</label>
+    <textarea id="extra" name="extra" placeholder="e.g. pale skin, short unpainted nails, slight motion blur"></textarea>
+
+    <button class="primary" id="go" type="submit">Generate</button>
+    <div class="error" id="error"></div>
+    <p class="hint">Adult subjects only. Prompts are checked before they reach the model, and the provider applies its own policy on top.</p>
+  </form>
+
+  <section id="preview">
+    <h2>Prompt sent to the model</h2>
+    <div id="promptPreview">—</div>
+    <h2>Gallery</h2>
+    <div id="gallery"><p class="empty">Nothing generated yet.</p></div>
+  </section>
+</main>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

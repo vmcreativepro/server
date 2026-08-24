@@ -1,0 +1,15 @@
+{
+  "name": "foot-pose-studio",
+  "version": "1.0.0",
+  "description": "AI foot pose reference generator — web app with pluggable image providers",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": { "node": ">=20" }
+}
