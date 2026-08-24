@@ -1,0 +1,19 @@
+# One-click deploy on Render: New > Blueprint, point it at this repo.
+services:
+  - type: web
+    name: pose-studio
+    runtime: node
+    rootDir: pose-studio
+    plan: starter          # a paid plan keeps a persistent disk; free loses images on restart
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: REPLICATE_API_TOKEN
+        sync: false        # set this in the Render dashboard, or paste it in the app's Setup panel
+    disk:
+      name: images
+      mountPath: /opt/render/project/src/pose-studio/data
+      sizeGB: 1
