@@ -1,186 +1,172 @@
-# Automated Trading Bot — Build Plan
+# Automated Trading Bot — Testnet-First Build Plan
 
-**Status:** Research + plan. No code written yet.
+**Status:** Research + plan. No code written yet. **No capital required.**
 **Date:** 2026-09-11
+**Revision:** 2 — restructured around a zero-cost testnet build after capital constraints were clarified.
 
 ---
 
-## 1. Verdict up front
+## 1. What this plan is now
 
-The source notes describe a system that cannot work as written. The specific failure is not
-effort or tooling — it is that the described edge (latency arbitrage) is a race against
-co-located HFT firms, entered with a 1-second polling loop. That is roughly three orders of
-magnitude too slow, and the notes contradict themselves: you cannot claim "the edge is pure
-speed" while polling once per second.
+Every phase below costs **$0**. The system is built and proven against Binance testnet and
+free public market data, and the deliverable is a working, failure-tested trading system —
+not a funded account.
 
-I recommend a different edge: **delta-neutral funding-rate / basis capture**. It is a
-*structural* edge rather than a *speed* edge, which means retail infrastructure is genuinely
-adequate — you are not competing on microseconds because the holding period is hours to days.
-Most of the architecture in the original notes (WebSocket data, 24/7 service, multi-market
-monitoring, iPad dashboard) is reusable. Only the strategy changes, and the timeline moves from
-48 hours to roughly 4–6 weeks to *careful* live trading.
+Live capital is the *last* phase, not the first, and it is optional. It waits until there is
+money whose total loss would change nothing.
 
-This document explains why, then gives the build plan.
+This is not a downgrade of the plan. It is the same architecture, the same strategy analysis
+and the same engineering gates, reordered so that the parts with real value (the software and
+the skills) come first and the part that requires money comes last.
+
+**Why the reorder:** at the smallest position Binance permits, this strategy earns about
+**1.5 cents per day**. That is covered honestly in §4. Trading grows capital you already have;
+it does not create capital you don't. The engineering, by contrast, is worth something
+immediately.
 
 ---
 
-## 2. Why the original premise fails
+## 2. Strategy: why funding capture, and why not the original premise
+
+The original notes described latency arbitrage — spotting price errors faster than anyone
+else — implemented with a one-second polling loop. That premise fails on its own terms.
 
 ### 2.1 The speed race is already lost
 
-| | Retail bot | HFT competitor |
+| | Bot as described | Actual competition |
 |---|---|---|
-| Data path | Public WebSocket over consumer/VPS link | Co-located server, direct feed |
-| Round-trip latency | 50–300 ms (or 1,000 ms if polling) | ~1 ms or below, often FPGA |
-| Reaction | Python event loop | Hardware/kernel-bypass networking |
+| Data path | Public WebSocket, consumer link | Co-located server, direct feed |
+| Sampling | 1,000 ms poll | Event-driven, continuous |
+| Round-trip reaction | 50–300 ms | ~1 ms, often FPGA |
 
-Gaps that "close in seconds" have been consumed long before a 1-second poll observes them.
-Mispricings on liquid BTC pairs are captured in the tens-of-milliseconds range. Building a
-latency strategy on a 1s loop is not a slightly weaker version of the same idea — it is a
-different, losing game.
+You cannot claim the edge is "pure speed" while sampling once per second. Dislocations on
+liquid BTC pairs are consumed in tens of milliseconds.
 
-### 2.2 "Arbitrage across dozens of markets" hides a capital problem
-
-Cross-exchange spot arbitrage requires the asset to already be on the venue where you sell.
-You cannot move BTC on-chain inside an arbitrage window — confirmation takes minutes, and fees
-are variable. So "dozens of markets" actually means dozens of *pre-funded, simultaneously
-capitalised accounts*, each carrying full exchange counterparty risk. Capital is fragmented
-across venues where it mostly sits idle, and every venue is an FTX-shaped tail risk.
-
-### 2.3 Triangular arbitrage dies on fees, before latency is even relevant
-
-Single-venue triangular arbitrage avoids transfer risk, so it looks attractive. The fee math
-closes it:
+### 2.2 Triangular arbitrage dies on arithmetic, not latency
 
 - Three taker legs at Binance VIP 0 with BNB discount: **3 × 0.075% = 0.225% required edge**
 - Typical dislocation on a liquid BTC/ETH/USDT triangle: **under 0.05%, lasting <100 ms**
 
-You need roughly 4–5× the edge that actually exists. This is structurally unprofitable at
-retail fee tiers regardless of how fast the code is. It only opens up at high VIP tiers with
-maker-only execution — i.e. for firms already doing billions in monthly volume.
+A four-to-fivefold shortfall that no amount of engineering closes at retail fee tiers.
 
-### 2.4 "Built in 48 hours" measures the wrong thing
+### 2.3 Cross-exchange spot arbitrage hides a capital problem
 
-A data pipeline and a paper trader are genuinely 48-hour work. What is *not* 48-hour work is
-everything that decides whether the bot survives: reconnect storms, partial fills, duplicate
-order submission, clock skew, rate-limit bans, position drift, margin top-ups, and the one
-unhandled exception at 03:00 UTC that leaves one leg naked and the hedge gone. Bots rarely die
-of a bad strategy. They die of an operational edge case while holding an unhedged position.
+The asset must already be on the venue where you sell it — you cannot move BTC on-chain inside
+an arbitrage window. "Dozens of markets" means dozens of simultaneously pre-funded accounts.
+Irrelevant to this plan regardless, since there is no capital to fragment.
 
-### 2.5 Claude Code writes the logic; it must not *be* the logic
+### 2.4 The chosen strategy: delta-neutral funding capture
 
-An important distinction the notes blur. Putting an LLM in the execution hot path adds seconds
-of latency, is non-deterministic (so it cannot be backtested reproducibly), costs money per
-decision, and cannot be audited after a loss. Claude Code belongs in research, code
-generation, backtest analysis, and postmortems. The live loop must be deterministic code.
+Long spot BTC against an equal-notional short BTC perpetual. Net price exposure ≈ zero;
+collect funding every 8 hours.
+
+Perpetuals never expire, so funding is the mechanism tethering the contract to spot. Persistent
+retail long bias means longs pay shorts most of the time — BTC funding on Binance was positive
+on 322 of 365 days in 2024. Binance settles at 00:00, 08:00 and 16:00 UTC, combining a fixed
+0.01% interest component with a premium index, capped per contract, paid trader-to-trader.
+
+**The property that matters: the latency budget is seconds, not microseconds.** That is what
+makes this buildable by one person, on a laptop, for free.
+
+### 2.5 Strategies considered
+
+| Strategy | Verdict | Reasoning |
+|---|---|---|
+| Cross-exchange spot arb | Rejected | Transfer latency + fragmented pre-funding |
+| Triangular arb | Rejected | 0.225% hurdle vs <0.05% available edge |
+| Directional ML | Rejected | Lowest prior of success, highest overfit risk |
+| Market making | Later | Real edge, but requires winning adverse selection |
+| **Funding / basis capture** | **Selected** | Structural edge, seconds-level latency budget |
 
 ---
 
-## 3. Recommended approach: delta-neutral funding capture
+## 3. The one thing testnet cannot teach you
 
-### 3.1 The trade
+This is the most important caveat in the document, because getting it wrong wastes months.
 
-Hold **long spot BTC** and **short an equal notional of BTC perpetual futures**. Net price
-exposure is approximately zero. You collect the perpetual funding payment every 8 hours.
+**Testnet proves correctness. It can never prove profitability.**
 
-### 3.2 Why the edge is structural, not competitive
+- Testnet order books are thin and synthetic — your fills are unrealistically easy
+- There is no real adverse selection and no realistic slippage
+- Testnet funding rates do not reflect real market funding
 
-Perpetual futures have no expiry, so the funding mechanism is what tethers the contract to
-spot. Persistent retail long bias means longs pay shorts most of the time — on Binance, BTC
-funding was positive on 322 of 365 days in 2024. You are being paid to take the unpopular side
-of a crowded position. That is a risk premium, not a race.
+So a testnet bot showing a profit has demonstrated **nothing at all** about the strategy. If
+the system "makes money" on testnet, that is not evidence. Do not let it become evidence.
 
-Binance funding settles at 00:00, 08:00 and 16:00 UTC. The rate combines a fixed interest
-component (0.01% per 8h for most contracts) with a premium index tracking perp-vs-spot
-deviation, and is capped per contract. Funding moves directly between traders; Binance takes
-no fee on it.
+The split that actually works:
 
-**Latency requirement: seconds.** A standard VPS is entirely adequate. This is the single
-most important property of the strategy choice.
+| Question | Answered by | Cost |
+|---|---|---|
+| Does the code execute correctly under failure? | **Testnet** | $0 |
+| Does the strategy make money after fees? | **Backtest on real historical data** | $0 |
+| Does the model survive contact with real fills? | Live, minimum size | Phase 6 |
 
-### 3.3 The economics — read this before anything else
+Real historical funding rates and klines are available from Binance's **public REST endpoints
+with no API key and no account** (`/fapi/v1/fundingRate`, `/api/v3/klines`). The strategy
+research phase uses real data and is free. Only execution uses testnet.
 
-Binance VIP 0 with BNB discount: spot 0.075% maker/taker, USDⓈ-M futures 0.018% maker /
-0.045% taker.
+---
 
-| | Round-trip cost (both legs, in and out) |
-|---|---|
-| All-taker execution | **0.240%** |
-| All-maker execution | **0.186%** |
+## 4. The economics, and the honest number at small size
 
-Against that cost, at various funding levels:
+### 4.1 Fee structure
 
-| Funding rate | Per day | Gross annualised | Break-even hold (taker) | Break-even hold (maker) |
+Binance VIP 0 with BNB discount: spot 0.075% either side, USDⓈ-M futures 0.018% maker /
+0.045% taker. A full round trip — both legs, in and out — costs **0.186%** all-maker,
+**0.240%** all-taker.
+
+| Funding rate | Per day | Gross annualised | Break-even (taker) | Break-even (maker) |
 |---|---|---|---|---|
 | 0.01% / 8h (baseline) | 0.03% | 10.9% | 8.0 days | 6.2 days |
 | 0.03% / 8h | 0.09% | 32.9% | 2.7 days | 2.1 days |
 | 0.05% / 8h | 0.15% | 54.8% | 1.6 days | 1.2 days |
-| 0.10% / 8h (episodic spike) | 0.30% | 109.5% | 0.8 days | 0.6 days |
+| 0.10% / 8h (spike) | 0.30% | 109.5% | 0.8 days | 0.6 days |
 
-**The single most important consequence: at baseline funding you need to hold the position for
-six to eight days just to pay for entering and exiting it.** A bot that rotates positions
-weekly at baseline funding loses money while appearing busy. Fee-awareness and patience *are*
-the strategy. This is the opposite of the "executing constantly across dozens of markets"
-picture in the notes.
+**At baseline funding the position must be held six to eight days purely to repay entering and
+exiting it.** Fee-awareness and patience *are* the strategy.
 
-Published return figures cluster around 15–35% annualised, with one 2025 estimate at ~19% and
-sub-2% drawdown. Treat these as optimistic: much of the material on this topic is marketing
-for arbitrage software, results are reported gross of the fee drag above, and the strategy
-decays as capital crowds in. **Plan against the ~10–15% net band, and treat anything above it
-as an episodic bonus during funding spikes.**
+### 4.2 What this returns at the smallest enterable size
 
-### 3.4 Honest capital reality
+Binance reduced the BTCUSDT perpetual minimum notional to **50 USDT in April 2026**. A real
+hedged pair therefore needs roughly $50 futures + $50 spot + a margin buffer — about
+**$120–150 to enter at all**.
 
-Minimum viable capital is roughly $2,000–5,000 once you account for funding both the spot and
-futures wallets plus a margin buffer. At $10,000 and 12% net, this returns about $1,200/year.
-The strategy is capital-constrained, not skill-constrained. If you are starting with a few
-thousand dollars, build it to learn the infrastructure and to have something real running —
-not as an income replacement. Sizing honesty up front prevents the classic failure of adding
-leverage to make small capital feel meaningful.
+At that size:
 
-### 3.5 Strategies considered and rejected (for now)
-
-| Strategy | Verdict |
+| | |
 |---|---|
-| Cross-exchange spot arbitrage | Rejected — transfer latency + capital fragmentation + multi-venue counterparty risk |
-| Triangular arbitrage | Rejected — 0.225% fee hurdle vs <0.05% available edge |
-| Market making | **Deferred to Phase 6** — real edge, but requires winning adverse selection; reuses this infrastructure |
-| Directional ML / "pattern recognition" | Rejected as a starting point — lowest prior of success, highest overfit risk, hardest to validate |
-| Cross-venue funding spread | **Phase 6 extension** — short the high-funding perp, long the low/negative one; delta-neutral without spot custody |
+| Funding earned, baseline | **~$0.015 / day** |
+| Per year, ~$100 deployed | **~$5** |
+| Round-trip fee to enter and exit | ~$0.12 |
 
----
+**About a cent and a half a day.** That is not a disappointing return — it is a rounding error.
 
-## 4. Hard gates — resolve before writing any code
+This is why capital comes last. The percentages do not care how much the money is needed; 12%
+of very little is very little. Any content implying otherwise is monetising the story, not the
+bot.
 
-**Gate A — Jurisdiction. This is a blocker, not a formality.**
-Binance Futures is unavailable to US residents following the 2023 DOJ settlement, and
-Binance.US does not offer futures. **If you are US-based, the primary strategy is not
-executable on Binance at all.** Viable regulated alternatives: Kraken Derivatives US, or
-Coinbase Financial Markets (CFTC-registered, BTC/ETH perpetual-style futures since July 2025).
-The strategy logic ports; the exchange adapter and the fee table do not. Confirm your
-jurisdiction and target venue before anything else — it determines the entire integration layer.
+### 4.3 The leverage trap — the actual danger
 
-**Gate B — API key hygiene.** Create keys with **trade permission only, withdrawals disabled,
-and an IP allowlist** pinned to your VPS. Never hold withdrawal-enabled keys on a trading
-host. Separate read-only keys for the dashboard.
+Small capital creates real pressure to reach for leverage, because 10× makes the numbers feel
+meaningful again. **That is precisely the move that converts this from a boring carry trade
+into losing the entire balance on one wick.**
 
-**Gate C — Tax treatment.** Funding payments and both legs generate taxable events at high
-frequency. Log every fill and funding payment in a tax-exportable form from day one.
-Retrofitting this is painful.
+This strategy is only safe *because* it runs unlevered. If the plan ever starts to feel too
+slow to be worth doing, that feeling is the risk — not the slowness. Treat any impulse to
+raise leverage as a signal to stop and re-read this section.
 
 ---
 
 ## 5. Architecture
 
-Deterministic Python service. Python is correct here specifically *because* the strategy does
-not need latency — choosing Rust would buy microseconds the edge does not use, at the cost of
-development speed.
+A deterministic Python service. Python is correct *because* the strategy needs no latency —
+Rust would buy microseconds the edge never spends.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Market Data Layer  (asyncio, WebSocket — never polling) │
-│  bookTicker · markPrice (carries funding) · depth        │
-│  reconnect w/ backoff · 24h forced-reconnect · gap detect│
+│  Market Data  (asyncio WebSocket — never polling)        │
+│  bookTicker · markPrice (funding) · depth                │
+│  reconnect w/ backoff · 24h forced reconnect · gap detect│
 └───────────────┬─────────────────────────────────────────┘
                 │ events
 ┌───────────────▼──────────────┐   ┌────────────────────────┐
@@ -189,8 +175,8 @@ development speed.
 └───────────────┬──────────────┘   └────────────────────────┘
                 │
 ┌───────────────▼──────────────┐
-│  Signal Layer                │  carry forecast, basis,
-│  expected net carry vs cost  │  funding percentile
+│  Signal Layer                │  expected net carry vs
+│  carry forecast vs cost      │  round-trip cost
 └───────────────┬──────────────┘
                 │ intent
 ┌───────────────▼──────────────┐   ┌────────────────────────┐
@@ -200,169 +186,185 @@ development speed.
                 │ approved
 ┌───────────────▼──────────────┐
 │  Execution Layer             │  idempotent clientOrderId,
-│  two-leg atomic-ish entry    │  maker-first → taker escalate
+│  two-leg entry + unwind      │  maker-first → taker escalate
 └──────────────────────────────┘
                 │
 ┌───────────────▼──────────────┐
-│  Recorder → Parquet/Timescale│──► Backtest & replay harness
+│  Recorder → Parquet          │──► Backtest & replay harness
 └──────────────────────────────┘
 ```
 
-### Component notes
-
-**Market data.** Event-driven WebSocket, not a 1-second poll. Binance forces disconnect at 24
-hours, sends a keepalive frame every 20s requiring a pong within 60s, and allows 300
-connections per 5 minutes per IP. Build reconnect and heartbeat handling first — this is the
-most common cause of silent failure. Record every tick to disk; that recording *is* your
-future backtest dataset.
-
-**State store.** The exchange is the source of truth, never in-memory state. Reconcile on every
-startup and on a periodic timer. A bot that believes it is flat while holding a position is the
-worst failure mode in the system.
-
-**Execution — the hard part.** The two legs must both fill or the position must unwind.
-- Idempotent `clientOrderId` on every order so a retry after a timeout cannot double-fill.
-- Maker-first with a timeout, escalating to taker (the 0.054% difference matters, per §3.3).
-- Verify delta-neutrality within tolerance after both legs; if the second leg fails, unwind the
-  first immediately rather than holding directional exposure.
-- Handle partial fills explicitly — a half-filled hedge is directional risk.
-
-**Risk layer.** Hard pre-trade vetoes: max position notional, max effective leverage, margin
-ratio floor, daily loss limit, and a manual kill switch. The short perp leg is the liquidation
-risk: run it at effectively 1× with a large margin buffer and automated top-up, and monitor
-auto-deleveraging (ADL) exposure. Leverage is what converts this from a carry trade into a
-blow-up.
-
-**Watchdog.** A *separate process* that can flatten all positions if the main service stops
-heartbeating. If the trading process is the only thing that can close positions, a crash while
-positioned is unbounded risk.
+| Component | Responsibility and the failure it prevents |
+|---|---|
+| Market data | Event-driven WebSocket, never polling. Binance force-disconnects at 24h, sends keepalive every 20s requiring a pong within 60s, caps 300 connections per 5 min per IP. Reconnect handling is the most common cause of silent failure. |
+| Recorder | Every tick to Parquet. This recording *is* the backtest dataset. |
+| State store | The exchange is the source of truth, never memory. Reconcile on startup and on a timer. A bot that believes it is flat while positioned is the worst failure mode in the system. |
+| Signal layer | Expected net carry over the minimum hold period versus round-trip cost, with a safety factor. |
+| Execution | Idempotent `clientOrderId` so a retry after timeout cannot double-fill. Maker-first with timeout, escalating to taker. If the second leg fails, unwind the first immediately. Partial fills handled explicitly — a half-filled hedge *is* directional risk. |
+| Risk layer | Pre-trade vetoes: max notional, max effective leverage, margin floor, daily loss limit, kill switch. |
+| Watchdog | A **separate process** that flattens everything if the main service stops heartbeating. |
 
 ---
 
-## 6. Phased build plan
+## 6. Phased build — every phase $0
 
-Each phase has an exit gate. Do not skip a gate to reach live trading faster — every phase
-exists because of a specific way bots lose money.
+### Phase 0 — Setup · Day 1 · **$0**
+Register Binance Spot Testnet (`testnet.binance.vision`) and Futures Testnet
+(`testnet.binancefuture.com`) accounts — both free, both issue instant fake balances. Create
+the repo. Run locally; no VPS needed until Phase 4.
 
-### Phase 0 — Gates (Day 1)
-Resolve §4 A/B/C. Choose venue based on jurisdiction. Provision VPS (for Binance, AWS
-`ap-northeast-1` Tokyo is nearest the matching engine; latency is not the edge here, but
-reliability is). Obtain testnet credentials.
-**Gate:** jurisdiction confirmed, keys created with withdrawals disabled and IP-allowlisted.
+**No jurisdiction gate at this stage.** Testnet is open regardless of location; venue and
+jurisdiction only matter at Phase 6.
 
-### Phase 1 — Data recorder (Week 1)
-WebSocket client with full reconnect/heartbeat/gap-detection. Records mark price, funding rate,
-spot and perp best bid/offer to Parquet. **No trading logic whatsoever.** Backfill historical
-funding rates and klines via REST.
-**Gate:** 7 days continuous uptime with zero unhandled disconnects, plus 12+ months of
-backfilled funding history.
+> **Gate:** testnet keys working, a script that fetches an account balance.
 
-### Phase 2 — Research and backtest (Week 2)
-Replay harness simulating fees, slippage, and funding payments against real history. Test the
-core question: *after the §3.3 fee drag, does an entry/exit rule beat simply holding the
-position permanently?*
-**Gate:** a rule with positive net return and a realistic drawdown profile. **If the backtest
-does not clear buy-and-hold-the-carry after fees, stop and reconsider — do not proceed to live
-on hope.** A negative result here is a successful phase; it saved real money.
+### Phase 1 — Data recorder · Week 1 · **$0**
+WebSocket client with full reconnect, heartbeat and gap detection, recording mark price,
+funding, and both books to Parquet. **No trading logic.** Market data streams need no API key
+at all. Backfill 12+ months of real funding history and klines from the public REST endpoints.
 
-### Phase 3 — Paper / testnet execution (Week 3)
-Full order lifecycle against testnet. Then deliberately break it: kill the network mid-leg,
-force reconnects, trigger rate limits, simulate partial fills, restart the process while
-positioned.
-**Gate:** every chaos scenario ends flat or correctly hedged, with no orphaned orders. The
-reconciler must recover state correctly after every kill.
+> **Gate:** 7 days continuous uptime, zero unhandled disconnects, 12+ months of real funding
+> history on disk.
 
-### Phase 4 — Live, minimum size (Week 4+)
-Real capital at the smallest size the exchange permits ($500–1,000). Run 2–4 weeks. The goal is
-not profit — it is **slippage attribution**: measure live fills against backtest assumptions
-and correct the model.
-**Gate:** live results within tolerance of backtest predictions. A large gap means the model is
-wrong, and scaling a wrong model scales the losses.
+### Phase 2 — Backtest on real history · Week 2 · **$0**
+Replay harness simulating fees, slippage and funding payments against **real** historical data
+(§3). The question: after the fee drag in §4.1, does any entry/exit rule beat simply holding
+the position permanently?
 
-### Phase 5 — Scale and monitor (Week 6+)
-Increase size gradually. Add the iPad dashboard now — a read-only PWA showing positions,
-funding, P&L attribution, and a kill switch. It has zero edge, which is exactly why it comes
-after the engine works rather than before.
+> **Gate:** a rule with positive net return and realistic drawdown. If it cannot clear
+> buy-and-hold-the-carry after fees, **stop and say so** — a negative result here is a
+> successful phase. It is also, on its own, a legitimate piece of quantitative research.
 
-### Phase 6 — Second strategy
-Reuse the infrastructure for cross-venue funding spreads, then market making. Market making is
-the genuinely higher-skill strategy and is worth reaching — but only on infrastructure already
-proven by Phases 1–5.
+### Phase 3 — Execution on testnet · Week 3 · **$0**
+Full order lifecycle against testnet: two-leg entry, unwind, partial fill handling, idempotent
+order IDs, position reconciliation. Correctness only — ignore testnet P&L entirely (§3).
+
+> **Gate:** every order path exercised; reconciler recovers correct state after a restart
+> mid-position.
+
+### Phase 4 — Chaos and reliability · Week 4 · **$0**
+Deliberately break it: kill the network mid-leg, force 24h reconnects, trip rate limits,
+simulate partial fills, `SIGKILL` the process while positioned, desync the clock. Add the
+watchdog. Optionally deploy to a free-tier or cheap VPS for a multi-day soak.
+
+This phase is the portfolio centrepiece — it is what separates a script from a system.
+
+> **Gate:** every chaos scenario ends flat or correctly hedged, no orphaned orders, watchdog
+> demonstrably flattens on heartbeat loss.
+
+### Phase 5 — Package it · Week 5 · **$0**
+README with the architecture diagram and the §4 economics, the backtest results written up
+honestly (including negative findings), test suite, clean commit history, a short demo. The
+read-only dashboard lands here too — positions, funding, P&L attribution, kill switch.
+
+> **Gate:** someone else can clone it, run the backtest, and understand the design without you
+> explaining it.
+
+### Phase 6 — Live, only when funded · Someday · **optional**
+Not a deadline. Preconditions, all of which must hold:
+
+1. **Jurisdiction resolved.** Binance Futures is closed to US residents post-2023 DOJ
+   settlement and Binance.US has no futures. US-based means porting to Kraken Derivatives US
+   or Coinbase Financial Markets — the strategy logic moves, the adapter and fee table do not.
+2. **API keys:** trade permission only, withdrawals disabled, IP allowlist.
+3. **Capital whose total loss changes nothing about your week.** Not money you need.
+4. **Unlevered.** See §4.3.
+5. **Tax logging** in place from the first live fill.
+
+The goal of the first live month is not profit — it is **slippage attribution**: measuring real
+fills against backtest assumptions. That is the only step testnet genuinely cannot substitute
+for.
 
 ---
 
-## 7. Risk register
+## 7. What the finished system demonstrates
+
+With no capital, this is the actual return on the work — and it accrues at Phase 5, not
+Phase 6.
+
+| Phase | Skill demonstrated |
+|---|---|
+| 1 | Async networking, streaming data, failure-tolerant I/O, time-series storage |
+| 2 | Quantitative research, backtesting, cost modelling, resisting overfitting |
+| 3 | Distributed state correctness, idempotency, external-system reconciliation |
+| 4 | Chaos engineering, fault tolerance, operational safety design |
+| 5 | Technical writing, honest reporting of results, shippable software |
+
+"I built a delta-neutral trading system, chaos-tested it, and the backtest says the edge is
+thinner than advertised" is a stronger thing to be able to say than most side projects — partly
+because the honesty is the rare part.
+
+No promises attached: a portfolio piece is not a job. But it is a real asset, it costs nothing
+but time, and it exists whether or not the strategy ever trades a dollar.
+
+---
+
+## 8. Risk register (applies from Phase 6 onward)
 
 | Risk | Mitigation |
 |---|---|
-| Funding flips negative | Explicit exit rule weighing exit cost (§3.3) against expected negative carry — exiting is not automatically correct |
-| Short leg liquidation on a price spike | Effective 1× leverage, large margin buffer, automated top-up, ADL monitoring |
-| Execution leg risk (one leg fills, one doesn't) | Immediate unwind of the filled leg; never hold a naked leg |
-| Exchange counterparty failure | Hard cap on capital at any single venue; this risk cannot be hedged, only limited |
+| Funding flips negative | Explicit exit rule weighing exit cost against expected negative carry |
+| Short leg liquidated on a spike | Unlevered, large margin buffer, automated top-up, ADL monitoring |
+| Leg risk: one fills, one doesn't | Immediate unwind of the filled leg; never hold a naked leg |
+| Exchange counterparty failure | Hard cap on capital at any single venue |
 | Process crash while positioned | Separate watchdog process with flatten authority |
-| Duplicate orders after a timeout | Idempotent `clientOrderId` on every submission |
-| Strategy decay from crowding | Track realised vs expected carry monthly; treat sustained decay as a stop signal |
-| Overfitting in Phase 2 | Out-of-sample holdout; prefer simple rules; be suspicious of anything spectacular |
+| Duplicate orders after timeout | Idempotent `clientOrderId` on every submission |
+| Strategy decay from crowding | Track realised vs expected carry monthly |
+| Overfitting in Phase 2 | Out-of-sample holdout, simple rules, suspicion of anything spectacular |
+| **Mistaking testnet P&L for evidence** | **See §3 — testnet proves correctness only** |
 
 ---
 
-## 8. Where Claude Code actually fits
+## 9. Where Claude Code fits
 
-**In scope:** generating the exchange adapters and WebSocket plumbing; writing the backtest
-harness; analysing backtest output and challenging the results; writing chaos tests; drafting
-the reconciler; postmortems on live/backtest divergence.
+**In scope:** exchange adapters and WebSocket plumbing; the backtest harness; analysing and
+challenging backtest output; chaos tests; the reconciler; postmortems.
 
-**Explicitly out of scope:** the live execution loop. It must be deterministic, auditable, and
-reproducible in backtest. An LLM in the hot path breaks all three.
+**Out of scope:** the live execution loop. It must be deterministic, auditable and reproducible
+in backtest — an LLM in the hot path breaks all three.
 
-This is a more useful framing than "Claude Code handles the trading logic," and it is also what
-makes the aggressive parts of the original timeline real — codegen genuinely compresses
-Phases 1–3.
+This is also what makes the timeline realistic: codegen genuinely compresses Phases 1–4.
 
 ---
 
-## 9. What is actually achievable in 48 hours
+## 10. What 48 hours actually buys
 
-Not a live trading system. But honestly:
+| Hours | Deliverable |
+|---|---|
+| 00–08 | Phase 0 complete, Phase 1 recorder running |
+| 08–24 | REST backfill of real funding history, data validation |
+| 24–40 | Backtest harness with real fee modelling |
+| 40–48 | **First results — does this edge survive fees?** |
 
-- **Hours 0–8:** Phase 0 gates + Phase 1 recorder running
-- **Hours 8–24:** REST backfill of funding history, data validation
-- **Hours 24–40:** Phase 2 backtest harness with real fee modelling
-- **Hours 40–48:** First backtest results — *does this edge survive fees?*
-
-That is a real, defensible 48 hours: at the end you know whether the strategy works, which is
-worth considerably more than an untested bot holding live positions. The remaining 3–5 weeks
-are execution correctness and risk plumbing, and that is the part that determines whether the
-account survives.
+A defensible 48 hours, and it costs nothing. At the end you know whether the strategy works,
+which is worth more than an untested bot holding positions.
 
 ---
 
-## 10. Kill criteria
+## 11. Kill criteria
 
-Stop and reassess if:
 - Phase 2 backtest does not beat passive carry after fees
-- Live results diverge from backtest by more than 50% on slippage
-- Realised annualised carry drops below ~8% net for a sustained period (below the risk-adjusted
-  value of the effort)
-- Any unhandled naked-leg incident occurs in live trading — fix the class of bug before resizing
+- Testnet P&L is being used as evidence of profitability (§3)
+- Any impulse to raise leverage to make returns feel meaningful (§4.3)
+- At Phase 6: live results diverge from backtest by more than 50% on slippage
+- At Phase 6: any naked-leg incident — fix the class of bug before resizing
 
 ---
 
-## 11. Sources
+## 12. Sources
 
 Exchange documentation (primary):
 - [Binance WebSocket streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
 - [Binance WebSocket API general info](https://developers.binance.com/docs/binance-spot-api-docs/websocket-api/general-api-information)
 - [Binance funding rate methodology](https://www.binance.com/en/support/faq/detail/360033525031)
+- [USDⓈ-M futures contract specifications](https://www.binance.com/en/support/faq/usd%E2%93%A2-margined-futures-contract-specifications-360033161972)
 
-Strategy and market context (secondary — note that much publicly available arbitrage content is
-marketing for trading software and reports returns gross of fees; figures above were
-re-derived independently where possible):
-- [Funding rate arbitrage risk/return study (ScienceDirect)](https://www.sciencedirect.com/science/article/pii/S2096720925000818)
-- [Funding rate arbitrage guide (Sharpe.ai)](https://www.sharpe.ai/learn/funding-rate-arbitrage)
+Strategy and market context (secondary — much public arbitrage content is marketing for trading
+software and quotes returns gross of fees; figures above were re-derived independently):
+- [Funding rate arbitrage risk/return study](https://www.sciencedirect.com/science/article/pii/S2096720925000818)
+- [Funding rate arbitrage guide](https://www.sharpe.ai/learn/funding-rate-arbitrage)
 - [Arbitrage strategies accessible to retail quants](https://blog.everstrike.io/7-arbitrage-strategies-are-still-accessible-to-retail-quants-in-2025/)
-- [Are AI crypto trading bots profitable — honest data](https://www.altrady.com/blog/crypto-bots/are-ai-crypto-trading-bots-profitable-2026)
+- [Are AI crypto trading bots profitable](https://www.altrady.com/blog/crypto-bots/are-ai-crypto-trading-bots-profitable-2026)
 - [Binance fee schedule 2026](https://www.bitget.com/academy/binance-fees-2026)
-- [Kraken: best crypto futures platforms](https://www.kraken.com/learn/best-crypto-futures-trading-platforms)
+- [Regulated futures venues](https://www.kraken.com/learn/best-crypto-futures-trading-platforms)
 - [US access to Binance futures](https://cryptopulsehq.com/binance-futures-us/)
-- [Freqtrade vs Hummingbot vs CCXT comparison](https://gainium.io/compare/freqtrade-vs-hummingbot)
